@@ -24,6 +24,7 @@ def denormalize(x): return x.cpu()
 class BcolzDataBunch(DataBunch):
     @classmethod
     def create(cls, train_ds, valid_ds, **kwargs):
+        if 'num_workers' in kwargs: kwargs.pop('num_workers')
         return super().create(train_ds, valid_ds, num_workers=0, **kwargs)
 
     def normalize(self, format3d=True, do_x=True, do_y=False):
