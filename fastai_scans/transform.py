@@ -101,8 +101,7 @@ def _crop(x, size, x_pct:uniform=0.5, y_pct:uniform=0.5, z_pct:uniform=0.5):
 def _zoom(x, scale:uniform=1.0, x_pct:uniform=0.5, y_pct:uniform=0.5, z_pct:uniform=0.5, **kwargs):
     size = x.shape
     is_int = x.dtype == torch.int64
-    if len(size) == 3:   x = F.interpolate(x[None,None].float(), scale_factor=scale)[0,0]
-    elif len(size) == 4: x = F.interpolate(x[None].float(), scale_factor=scale)[0]
+    x = F.interpolate(x[None].float(), scale_factor=scale)[0]
     return _crop(x.long() if is_int else x, size=size[-3:], x_pct=x_pct, y_pct=y_pct, z_pct=z_pct)
 
 def _sample_patch(tfm_params):

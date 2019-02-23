@@ -4,7 +4,7 @@ from fastai.layers import SelfAttention
 __all__ = ['SegCrossEntropy', 'ParallelLoss', 'AdaptiveConcatPool3d', 'Upsample3d', 'Upsample3dLike', 'upsample3d_like',
            'pixel_shuffle_nd', 'icnr3d', 'PixelShuffle3d_ICNR',
            'batchnorm_3d', 'conv3d', 'conv3d_trans', 'conv_layer3d', 'res_block3d',
-           'ResLayer3d', 'Apply2dConv', 'ReshapeSeg2d']
+           'Apply2dConv', 'ReshapeSeg2d']
 
 class SegCrossEntropy(nn.CrossEntropyLoss):
     def forward(self, input, target):
@@ -12,13 +12,13 @@ class SegCrossEntropy(nn.CrossEntropyLoss):
         return super().forward(input.view(n, c, -1), target.view(n, -1))
 
 class ParallelLoss(nn.Module):
-    def __init__(self, diagnosis_weight=0.5):
+    def __init__(self, regression=False, diagnosis_weight=0.5):
         super().__init__()
         self.diagnosis_weight = diagnosis_weight
         self.seg_loss = SegCrossEntropy()
-        self.lbl_loss = nn.CrossEntropyLoss()
-        self.metric_names = ['seg_loss', 'cls_loss']
-        
+        self.lbl_loss = nn.CrossEntropyLoss() if regression else nn.MSELoss()
+        self.metric_names = ['seg_loss', 'cls_loss' if regression else 'reg_loss']
+
     def forward(self, input, targ_seg, targ_lbl):
         seg, lbl = input
         L_seg = self.seg_loss(seg, targ_seg)
@@ -31,16 +31,16 @@ class AdaptiveConcatPool3d(nn.Module):
         super().__init__()
         sz = sz or 1
         self.ap, self.mp = nn.AdaptiveAvgPool3d(sz), nn.AdaptiveMaxPool3d(sz)
-    
+
     def forward(self, x): return torch.cat([self.mp(x), self.ap(x)], 1)
 
 class Upsample3d(nn.Module):
     def __init__(self, shape):
         super().__init__()
         self.shape = shape
-    
+
     def forward(self, x): return F.interpolate(x, self.shape, mode='nearest')
-    
+
 class Upsample3dLike(Upsample3d):
     def __init__(self, target):
         super().__init__(target.shape[-3:])
@@ -63,7 +63,7 @@ def pixel_shuffle_nd(input, upscale_factor):
     indicies = indicies[1::2] + indicies[0::2]
 
     shuffle_out = input_view.permute(0, 1, *(indicies[::-1])).contiguous()
-    
+
     return shuffle_out.view(input_size[0], input_size[1], *output_size)
 
 def icnr3d(x, scale=2, init=nn.init.kaiming_normal_):
@@ -122,7 +122,7 @@ def conv_layer3d(ni:int, nf:int, ks:int=3, stride:int=1, padding:int=None, bias:
         layers += [conv3d(ni, nf, ks=1, stride=1, padding=0, bias=bias, norm_type=norm_type, init=init)]
     else:
         layers += [conv3d(ni, nf, ks=ks, stride=stride, padding=padding, bias=bias, norm_type=norm_type, init=init)]
-    
+
     if use_activ: layers.append(relu(True, leaky=leaky))
     if bn: layers.append(nn.BatchNorm3d(nf))
     if self_attention: layers.append(SelfAttention(nf))
@@ -133,16 +133,9 @@ def res_block3d(nf, dense:bool=False, norm_type:Optional[NormType]=NormType.Batc
     norm2 = norm_type
     if not dense and (norm_type==NormType.Batch): norm2 = NormType.BatchZero
     nf_inner = nf//2 if bottle else nf
-    return SequentialEx(conv_layer3d(nf, nf_inner, norm_type=norm_type, **kwargs),
-                      conv_layer3d(nf_inner, nf, norm_type=norm2, **kwargs),
-                      MergeLayer(dense))
-
-class ResLayer3d(nn.Module):
-    def __init__(self, ni):
-        super().__init__()
-        self.conv1 = conv_layer3d(ni, ni//2, ks=1)
-        self.conv2 = conv_layer3d(ni//2, ni, ks=3)
-    def forward(self, x): return x + self.conv2(self.conv1(x))
+    return SequentialEx(conv_layer3d(nf, nf_inner, ks=1, norm_type=norm_type, **kwargs),
+                        conv_layer3d(nf_inner, nf, norm_type=norm2, **kwargs),
+                        MergeLayer(dense))
 
 class Apply2dConv(nn.Module):
     def __init__(self, arch, pool=True):
@@ -150,7 +143,7 @@ class Apply2dConv(nn.Module):
         layers = [arch]
         if pool: layers += [nn.AdaptiveMaxPool2d(1), Flatten()]
         self.arch = nn.Sequential(*layers)
-        
+
     def forward(self, x):
         b, t, *size = x.shape
         x = x[:,:,None].expand([b,t,3,*size])

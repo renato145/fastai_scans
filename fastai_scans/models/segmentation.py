@@ -1,6 +1,5 @@
 from fastai.basics import *
 from fastai.callbacks.hooks import *
-from fastai.vision.models.unet import _get_sfs_idxs
 from ..layers import *
 
 __all__ = ['get_segmentation_metrics', 'VnetBlock', 'DynamicVnet']
@@ -30,9 +29,16 @@ def dice(input, targs):
 
 def get_segmentation_metrics(): return [accuracy, dice]
 
+def _get_sfs_idxs(sizes:Sizes) -> List[int]:
+    "Get the indexes of the layers where the size of the activation changes."
+    feature_szs = [size[-3:] for size in sizes]
+    sfs_idxs = list(np.where(np.any(np.array(feature_szs[:-1]) != np.array(feature_szs[1:]), axis=1))[0])
+    if feature_szs[0] != feature_szs[1]: sfs_idxs = [0] + sfs_idxs
+    return sfs_idxs
+
 class VnetBlock(nn.Module):
-    def __init__(self, up_in_c:int, x_in_c:int, hook:Hook, final_div:bool=True, do_shuffle:bool=True,
-                 double_out_conv=True, leaky:float=None, self_attention:bool=False, **kwargs):
+    def __init__(self, up_in_c:int, x_in_c:int, hook:Hook, final_div:bool=True, do_shuffle:bool=False,
+                 double_out_conv=False, leaky:float=None, self_attention:bool=False, **kwargs):
         super().__init__()
         self.hook = hook
         

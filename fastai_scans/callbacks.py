@@ -7,6 +7,7 @@ from sklearn.metrics import roc_auc_score
 __all__ = ['LossMetrics', 'AucLogger', 'ParallelAucLogger']
 
 class LossMetrics(callbacks.LossMetrics):
+    'Modification for Parallel models'
     def on_batch_end(self, last_target, train, **kwargs):
         "Update the metrics if not `train`"
         if train: return
@@ -53,8 +54,11 @@ class AucLogger(LearnerCallback):
             if   ds_type == DatasetType.Train: classifier_report(*self.get_train_preds(), title='Train Set')
             elif ds_type == DatasetType.Valid: classifier_report(*self.get_validation_preds(), title='Validation Set')
             else:
-                _,lims = classifier_report(*self.get_train_preds(), title='Train Set')
-                classifier_report(*self.get_validation_preds(), title='Validation Set', lims=lims)
+                axs1,lims1 = classifier_report(*self.get_train_preds(), title='Train Set')
+                axs2,lims2 = classifier_report(*self.get_validation_preds(), title='Validation Set')
+                lims = min(lims1+lims2),max(lims1+lims2)
+                axs1[-1].set_xlim(lims)
+                axs2[-1].set_xlim(lims)
         
     def on_batch_end(self, train, last_output, last_target, **kwargs):
         if not train:

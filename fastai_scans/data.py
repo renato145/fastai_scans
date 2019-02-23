@@ -10,11 +10,8 @@ def self_normalize(x, **kwargs):
     std = x.view(*x.shape[:2], -1).std(-1)[...,None,None,None]
     return (x-mean)/std
 
-def _format3d(x, **kwargs): return x[:,None] if len(x.shape)<5 else x
-
-def normalize_fun(b, format3d=True, do_x=True, do_y=False):
+def normalize_fun(b, do_x=True, do_y=False):
     x,y = b
-    if format3d: x = _format3d(x)
     if do_x: x = self_normalize(x)
     if do_y: y = self_normalize(y)
     return x,y
@@ -27,19 +24,19 @@ class BcolzDataBunch(DataBunch):
         if 'num_workers' in kwargs: kwargs.pop('num_workers')
         return super().create(train_ds, valid_ds, num_workers=0, **kwargs)
 
-    def normalize(self, format3d=True, do_x=True, do_y=False):
+    def normalize(self, do_x=True, do_y=False):
         if getattr(self,'norm',False): raise Exception('Can not call normalize twice')
-        self.norm = partial(normalize_fun, format3d=format3d, do_x=do_x, do_y=do_y)
+        self.norm = partial(normalize_fun, do_x=do_x, do_y=do_y)
         self.denorm = denormalize
         self.add_tfm(self.norm)
         return self
 
 class VolumeItemList(ItemList):
-    _item_cls,_label_cls,_bunch,_square_show  = Volume,CategoryList,BcolzDataBunch,False
-    def __init__(self, items, bcolz_array:bcolz.carray, metadata:pd.DataFrame=None, tfm_params=None, **kwargs):
+    _item_cls,_bunch,_square_show  = Volume,BcolzDataBunch,False
+    def __init__(self, items, bcolz_array:bcolz.carray, metadata:pd.DataFrame, tfm_params=None, **kwargs):
         self.bcolz_array = bcolz_array
         self.metadata = metadata
-        self.tfm_params = [None]*bcolz_array.shape[0] if tfm_params is None else tfm_params
+        self.tfm_params = tfm_params
         super().__init__(items, **kwargs)
     
     def new(self, items, **kwargs):
@@ -48,7 +45,8 @@ class VolumeItemList(ItemList):
     def get(self, i):
         idx = super().get(i)
         metadata = None if self.metadata is None else self.metadata.iloc[idx]
-        return self._item_cls(self.bcolz_array[idx], idx=idx, metadata=metadata, tfm_params=self.tfm_params[idx])
+        tfm_params = None if self.tfm_params is None else self.tfm_params[idx]
+        return self._item_cls(self.bcolz_array[idx], idx=idx, metadata=metadata, tfm_params=tfm_params)
     
     @classmethod
     def from_carray(cls, bcolz_array, metadata, tfm_params=None, items=None, **kwargs):
@@ -68,6 +66,20 @@ class VolumeItemList(ItemList):
         '''
         return cls.from_carray(bcolz.open(path, mode='r'), pd.read_csv(metadata_path), tfm_params, **kwargs)
 
+    def filter_by_idxs(self, idxs):
+        self.items = idxs
+        return self
+
+    def filter_na_lbls(self, col_name):
+        col = self.metadata[col_name]
+        if col.isna().sum() > 0:
+            tmp_lbl = col.dropna().iloc[0]
+            idxs = self.metadata.index[col.notna()].to_numpy()
+            col.fillna(tmp_lbl, inplace=True)
+            return self.filter_by_idxs(idxs)
+        else:
+            return self
+
     def split_by_metadata(self, col_name):
         valid_idx = np.where(self.metadata[col_name]==1)[0]
         return super().split_by_idx(valid_idx)
@@ -84,11 +96,16 @@ class VolumeItemList(ItemList):
             xs[i].show(axes=row_axs, label=ys[i], channel=channel, **kwargs)
         plt.tight_layout()
         
-    def show_xyzs(self, xs, ys, zs, channel=0, n_slices=4, imgsize=3, figsize=None, **kwargs):
+    def show_xyzs(self, xs, ys, zs, channel=0, n_slices=4, imgsize=3, figsize=None, y_scale=None, **kwargs):
         rows = len(xs)
         axs = subplots(rows, n_slices, imgsize=imgsize, figsize=figsize)
         for i, row_axs in enumerate(axs):
-            xs[i].show(axes=row_axs, label=ys[i], extra=[f'Prediction: {zs[i]}'], channel=channel, **kwargs)
+            if isinstance(zs[i].data, (tuple,list,np.ndarray)):
+                pred = zs[i].data[0] if len(zs[i].data)==1 else zs[i].data
+            else: pred = zs[i]
+            if y_scale is not None: pred *= y_scale
+            xs[i].show(axes=row_axs, label=ys[i], extra_lbl=['Prediction'], extra_inf=[pred], channel=channel,
+                       y_scale=y_scale, **kwargs)
         plt.tight_layout()
 
 class SegmentationLabelList(VolumeItemList):
@@ -102,7 +119,7 @@ class SegmentationLabelList(VolumeItemList):
 class SegmentationItemList(VolumeItemList):
     _label_cls = SegmentationLabelList
     def __init__(self, items, bcolz_array:bcolz.carray, bcolz_array_masks:bcolz.carray,
-                 metadata:pd.DataFrame=None, tfm_params:np.array=None, **kwargs):
+                 metadata:pd.DataFrame, tfm_params:np.array=None, **kwargs):
         super().__init__(items, bcolz_array, metadata, tfm_params, **kwargs)
         self.bcolz_array_masks = bcolz_array_masks
     
@@ -111,7 +128,7 @@ class SegmentationItemList(VolumeItemList):
                                                metadata=self.metadata, tfm_params=self.tfm_params, **kwargs)
     
     @classmethod
-    def from_carray(cls, bcolz_array, bcolz_array_masks, metadata, tfm_params=None):
+    def from_carray(cls, bcolz_array, bcolz_array_masks, metadata=None, tfm_params=None):
         items = range(len(bcolz_array))
         return cls(items, bcolz_array, bcolz_array_masks, metadata, tfm_params)
 
@@ -126,8 +143,8 @@ class SegmentationItemList(VolumeItemList):
                                                  .databunch(bs=4)
                                                  .normalize())
         '''
-        return cls.from_carray(bcolz.open(path, mode='r'), bcolz.open(path_masks, mode='r'),
-                               None if metadata_path is None else pd.read_csv(metadata_path), tfm_params)
+        metadata = metadata_path if metadata_path is None else pd.read_csv(metadata_path)
+        return cls.from_carray(bcolz.open(path, mode='r'), bcolz.open(path_masks, mode='r'), metadata, tfm_params)
     
     def label_from_bcolz(self, **kwargs):
         y = self._label_cls.from_carray(self.bcolz_array_masks, self.metadata, self.tfm_params,
@@ -166,11 +183,11 @@ class ParallelLabelList(VolumeItemList):
     def __init__(self, items, bcolz_array:bcolz.carray, labels, metadata:pd.DataFrame, tfm_params=None,
                  classes=None, **kwargs):
         super().__init__(items, bcolz_array, metadata, tfm_params, **kwargs)
-        self.labels,self.classes,self.loss_func = labels,classes,ParallelLoss()
+        self.labels,self.classes,self.loss_func = labels,classes,ParallelLoss(regression=False)
     
     def new(self, items, **kwargs):
-        return super(VolumeItemList, self).new(items, bcolz_array=self.bcolz_array, labels=self.labels,
-                                               metadata=self.metadata, tfm_params=self.tfm_params, classes=self.classes, **kwargs)
+        return super(VolumeItemList, self).new(items, bcolz_array=self.bcolz_array, labels=self.labels, metadata=self.metadata,
+                                               tfm_params=self.tfm_params, classes=self.classes, **kwargs)
     
     def get(self, i):
         idx = self.items[i]
@@ -186,8 +203,30 @@ class ParallelLabelList(VolumeItemList):
     
     def reconstruct(self, t:Tensor): return self._item_cls(t[0], t[1], self.classes[t[1]])
     
+class ParallelFloatList(VolumeItemList):
+    _item_cls = VolumeSegmentFloat
+    def __init__(self, items, bcolz_array:bcolz.carray, labels, metadata:pd.DataFrame, tfm_params=None, **kwargs):
+        super().__init__(items, bcolz_array, metadata, tfm_params, **kwargs)
+        self.labels,self.loss_func = labels,ParallelLoss(regression=True)
+    
+    def new(self, items, **kwargs):
+        return super(VolumeItemList, self).new(items, bcolz_array=self.bcolz_array, labels=self.labels,
+                                               metadata=self.metadata, tfm_params=self.tfm_params, **kwargs)
+    
+    def get(self, i):
+        idx = self.items[i]
+        return self._item_cls(self.bcolz_array[idx], self.labels[idx], idx=idx, metadata=self.metadata.iloc[idx])
+    
+    @classmethod
+    def from_carray(cls, bcolz_array, labels, metadata, tfm_params=None, items=None, **kwargs):
+        if items is None: items = range(len(bcolz_array))
+        return cls(items, bcolz_array, labels, metadata, tfm_params, **kwargs)
+    
+    def analyze_pred(self, pred, thresh:float=0.5): return (pred[0].argmax(0), pred[1])
+    
+    def reconstruct(self, t:Tensor): return self._item_cls(t[0], t[1])
+
 class ParallelItemList(SegmentationItemList):
-    _label_cls = ParallelLabelList
     @classmethod
     def from_paths(cls, path, path_masks, metadata_path, tfm_params=None):
         '''
@@ -204,7 +243,8 @@ class ParallelItemList(SegmentationItemList):
     
     def label_from_bcolz(self, lbl_column, **kwargs):
         labels = self.metadata[lbl_column].tolist()
-        y = self._label_cls.from_carray(self.bcolz_array_masks, labels, self.metadata, self.tfm_params,
+        _label_cls = ParallelFloatList if isinstance(labels[0], (float, np.float32)) else ParallelLabelList
+        y = _label_cls.from_carray(self.bcolz_array_masks, labels, self.metadata, self.tfm_params,
                                         items=self.items, path=self.path, **kwargs)
         res = self._label_list(x=self, y=y)
         return res
@@ -241,3 +281,4 @@ def seg_subplots(rows, cols, n_segs=2, imgsize=4, figsize=None, title=None, **kw
             axes.append(ax)
     if title is not None: fig.suptitle(title, **kwargs)
     return list(chunks(axes, cols*n_segs))
+
