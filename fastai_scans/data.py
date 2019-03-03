@@ -85,7 +85,7 @@ class VolumeItemList(ItemList):
         return super().split_by_idx(valid_idx)
 
     def label_from_metadata(self, col_name, **kwargs):
-        return self.label_from_list(self.metadata.iloc[self.items][col_name], **kwargs)
+        return self._label_from_list(self.metadata.iloc[self.items][col_name], **kwargs)
 
     def reconstruct(self, t:Tensor): return self._item_cls(t)
 
