@@ -58,7 +58,7 @@ class VolumeItemList(ItemList):
         '''
         Use ex:
         data = (fastai_scans.VolumeItemList.from_paths(path / 'train_scans128', path/'train_metadata.csv')
-                                           .random_split_by_pct(0.2, seed=7)
+                                           .split_by_rand_pct(0.2, seed=7)
                                            .label_from_metadata('mort')
                                            .transform(fastai_scans.get_transforms())
                                            .databunch(bs=8)
@@ -137,7 +137,7 @@ class SegmentationItemList(VolumeItemList):
         '''
         Use ex:
         data = (fastai_scans.SegmentationItemList.from_paths(path/'train_scans128', path/'train_segmentation', path/'train_metadata.csv')
-                                                 .random_split_by_pct(0.2, seed=7)
+                                                 .split_by_rand_pct(0.2, seed=7)
                                                  .label_from_bcolz()
                                                  .transform(fastai_scans.get_transforms(), tfm_y=True)
                                                  .databunch(bs=4)
@@ -146,7 +146,7 @@ class SegmentationItemList(VolumeItemList):
         metadata = metadata_path if metadata_path is None else pd.read_csv(metadata_path)
         return cls.from_carray(bcolz.open(path, mode='r'), bcolz.open(path_masks, mode='r'), metadata, tfm_params)
     
-    def label_from_bcolz(self, **kwargs):
+    def label_from_bcolz(self, from_item_lists=False, **kwargs):
         y = self._label_cls.from_carray(self.bcolz_array_masks, self.metadata, self.tfm_params,
                                         items=self.items, path=self.path, **kwargs)
         res = self._label_list(x=self, y=y)
@@ -232,7 +232,7 @@ class ParallelItemList(SegmentationItemList):
         '''
         Use ex:
         data = (fastai_scans.ParallelItemList.from_paths(path/'train_scans128', path/'train_segmentation', path/'train_metadata.csv')
-                                             .random_split_by_pct(0.2, seed=7)
+                                             .split_by_rand_pct(0.2, seed=7)
                                              .label_from_bcolz('mort')
                                              .transform(fastai_scans.get_transforms(), tfm_y=True)
                                              .databunch(bs=8)
@@ -241,7 +241,7 @@ class ParallelItemList(SegmentationItemList):
         return cls.from_carray(bcolz.open(path, mode='r'), bcolz.open(path_masks, mode='r'),
                                pd.read_csv(metadata_path), tfm_params)
     
-    def label_from_bcolz(self, col_name, **kwargs):
+    def label_from_bcolz(self, col_name, from_item_lists=False, **kwargs):
         labels = self.metadata[col_name].tolist()
         _label_cls = ParallelFloatList if isinstance(labels[0], (float, np.float32)) else ParallelLabelList
         y = _label_cls.from_carray(self.bcolz_array_masks, labels, self.metadata, self.tfm_params,
