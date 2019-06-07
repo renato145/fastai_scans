@@ -27,6 +27,7 @@ class RandTransform():
     resolved:dict = field(default_factory=dict)
     do_run:bool = True
     is_random:bool = True
+    use_on_y:bool = True
     def resolve(self, tfm_params=None):
         "Bind any random variables in the transform."
         if not self.is_random:
